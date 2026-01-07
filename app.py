@@ -37,6 +37,31 @@ app = Flask(__name__,
 )
 CORS(app)
 
+# Detect PythonAnywhere
+IS_PYTHONANYWHERE = 'pythonanywhere' in os.environ.get('HOME', '').lower()
+
+# Set PythonAnywhere specific paths
+if IS_PYTHONANYWHERE:
+    # Set FFmpeg path
+    FFMPEG_PATH = '/home/ahmedsallu/ffmpeg-static/ffmpeg'
+    os.environ["PATH"] = '/home/ahmedsallu/ffmpeg-static:' + os.environ.get("PATH", "")
+    
+    # Set download directory
+    DOWNLOAD_DIR = '/home/ahmedsallu/mysite/downloads'
+    CONFIG_DIR = '/home/ahmedsallu/mysite/app_data'
+    
+    # Create directories
+    for directory in [DOWNLOAD_DIR, CONFIG_DIR]:
+        os.makedirs(directory, exist_ok=True)
+    
+    # Add FFmpeg location to yt-dlp options
+    FFMPEG_LOCATION = FFMPEG_PATH
+else:
+    # Local development paths
+    FFMPEG_PATH = 'ffmpeg'
+    DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
+    CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'app_data')
+    FFMPEG_LOCATION = 'ffmpeg'
 # ========== STORAGE CONFIGURATION ==========
 if IS_PYTHONANYWHERE:
     USERNAME = os.environ.get('USER', 'youtube_downloader_user')
