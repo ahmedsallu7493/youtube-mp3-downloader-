@@ -427,28 +427,36 @@ def download_audio(url, download_dir=None, download_id=None, quality="192"):
     
     # YouTubeDL options
     ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": os.path.join(download_dir, "%(title)s.%(ext)s"),
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": quality,
-            }
-        ],
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "nooverwrites": True,
-        "socket_timeout": 30,
-        "retries": 3,
-        "skip_js_warning": True,
-        "progress_hooks": [progress_hook],
-        "max_filesize": 50 * 1024 * 1024,
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    "format": "bestaudio/best",
+    "outtmpl": os.path.join(download_dir, "%(title)s.%(ext)s"),
+    "postprocessors": [
+        {
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": quality,
+            "preferredquality": "128",  # Use 128kbps for free tier
         }
-    }
+    ],
+    "quiet": True,
+    "no_warnings": True,
+    "noplaylist": True,
+    "nooverwrites": True,
+    "socket_timeout": 30,
+    "retries": 3,
+    "skip_js_warning": True,
+    "progress_hooks": [progress_hook],
+    "max_filesize": 30 * 1024 * 1024,  # 30MB limit (safer for free tier)
+    "http_headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    },
+    # PythonAnywhere specific
+    "ffmpeg_location": FFMPEG_LOCATION,
+    "noprogress": True,
+    "extract_flat": False,
+    "ignoreerrors": False,
+    "no_color": True,
+    "throttledratelimit": 100000,  # Limit download speed
+}
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
