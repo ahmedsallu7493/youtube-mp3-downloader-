@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="description" content="Free YouTube to MP3 converter with batch downloads and quality selection">
+    <meta name="keywords" content="YouTube MP3, YouTube converter, free MP3 download, audio extractor">
+    <meta name="author" content="{{ developer.name }}">
+    
+    <title>YouTube MP3 Downloader | Enhanced Edition</title>
+    
+    <!-- Stylesheets -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎵</text></svg>">
+    
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#0f0c29">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    
+    <!-- Open Graph Tags -->
+    <meta property="og:title" content="YouTube MP3 Downloader | Enhanced Edition">
+    <meta property="og:description" content="Convert YouTube videos to MP3 with batch downloads and quality selection">
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div class="loading-screen" id="loading-screen">
+        <div class="loading-content">
+            <div class="loading-spinner">
+                <i class="fas fa-music"></i>
+            </div>
+            <h2>Loading MP3 Downloader</h2>
+            <p>Preparing enhanced features...</p>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="logo">
+                <i class="fas fa-music"></i>
+                <div class="logo-text">
+                    <h1>YouTube<span>MP3</span></h1>
+                    <p class="tagline">Enhanced Edition with Batch Downloads</p>
+                </div>
+            </div>
+            
+            <!-- Developer Badge -->
+            <div class="developer-badge">
+                <i class="fas fa-code"></i>
+                <span>Developed by {{ developer.name }}</span>
+            </div>
+            
+            <!-- Status Badge -->
+            <div class="status-badge {% if ffmpeg_available %}status-success{% else %}status-error{% endif %}">
+                <i class="fas {% if ffmpeg_available %}fa-check-circle{% else %}fa-exclamation-circle{% endif %}"></i>
+                <span>{% if ffmpeg_available %}FFmpeg Ready{% else %}FFmpeg Required{% endif %}</span>
+            </div>
+        </header>
+
+        <main>
+            <!-- Main Download Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fab fa-youtube"></i> YouTube MP3 Downloader</h2>
+                    <p>Convert YouTube videos to MP3 with enhanced features</p>
+                </div>
+                
+                <!-- URL Input -->
+                <div class="input-group">
+                    <div class="input-icon">
+                        <i class="fas fa-link"></i>
+                    </div>
+                    <input type="text" id="url" 
+                           placeholder="Paste YouTube URL here..."
+                           aria-label="YouTube URL"
+                           autocomplete="off"
+                           autocorrect="off"
+                           autocapitalize="off"
+                           spellcheck="false">
+                    <button class="input-clear" onclick="clearInput()" title="Clear">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <!-- Video Info Preview -->
+                <div class="video-preview" id="video-preview" style="display: none;">
+                    <div class="preview-content">
+                        <div class="preview-thumbnail" id="preview-thumbnail"></div>
+                        <div class="preview-info">
+                            <h4 id="preview-title">Loading...</h4>
+                            <div class="preview-details">
+                                <span id="preview-duration"><i class="fas fa-clock"></i> Loading...</span>
+                                <span id="preview-uploader"><i class="fas fa-user"></i> Loading...</span>
+                            </div>
+                            <div class="preview-warning" id="preview-warning"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Quality Selection -->
+                <div class="quality-selector">
+                    <label for="audio-quality"><i class="fas fa-volume-up"></i> Audio Quality:</label>
+                    <select id="audio-quality">
+                        <option value="128">128 kbps (Good Quality)</option>
+                        <option value="192" selected>192 kbps (Better Quality)</option>
+                        <option value="256">256 kbps (Best Quality)</option>
+                    </select>
+                </div>
+                
+                <!-- Download Location -->
+                <div class="download-location">
+                    <label><i class="fas fa-folder"></i> Save to:</label>
+                    <select id="download-location">
+                        <option value="downloads">Downloads Folder</option>
+                        <option value="music">Music Folder</option>
+                        <option value="custom">Custom Location...</option>
+                    </select>
+                </div>
+                
+                <!-- Action Buttons -->
+                <div class="button-group">
+                    <button class="btn-primary" onclick="startDownload()" id="download-btn">
+                        <i class="fas fa-download"></i> Download MP3
+                    </button>
+                    <button class="btn-secondary" onclick="showBatchModal()">
+                        <i class="fas fa-layer-group"></i> Batch Download
+                    </button>
+                    <button class="btn-info" onclick="checkURL()" id="check-btn">
+                        <i class="fas fa-info-circle"></i> Check URL
+                    </button>
+                </div>
+                
+                <!-- Download Progress -->
+                <div class="progress-container" id="progress-container" style="display: none;">
+                    <div class="progress-header">
+                        <h4><i class="fas fa-spinner fa-spin"></i> Download Progress</h4>
+                        <span id="progress-status">Starting...</span>
+                    </div>
+                    
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="progress-bar"></div>
+                        <div class="progress-text" id="progress-text">0%</div>
+                    </div>
+                    
+                    <div class="progress-details">
+                        <div class="progress-item">
+                            <i class="fas fa-file-alt"></i>
+                            <span id="progress-filename">Waiting for title...</span>
+                        </div>
+                        <div class="progress-item">
+                            <i class="fas fa-tachometer-alt"></i>
+                            <span id="progress-speed">0 B/s</span>
+                        </div>
+                        <div class="progress-item">
+                            <i class="fas fa-clock"></i>
+                            <span id="progress-eta">Calculating...</span>
+                        </div>
+                        <div class="progress-item">
+                            <i class="fas fa-database"></i>
+                            <span id="progress-size">0 B / 0 B</span>
+                        </div>
+                    </div>
+                    
+                    <div class="progress-actions">
+                        <button class="btn-cancel-download" onclick="cancelDownload()" id="cancel-btn">
+                            <i class="fas fa-times"></i> Cancel
+                        </button>
+                        <a class="btn-download-file" id="download-file-link" style="display: none;" download>
+                            <i class="fas fa-file-download"></i> Download File
+                        </a>
+                    </div>
+                </div>
+                
+                <!-- Quick Tips -->
+                <div class="quick-tips">
+                    <h4><i class="fas fa-lightbulb"></i> Quick Tips:</h4>
+                    <ul>
+                        <li>Supports single URLs and batch downloads</li>
+                        <li>Choose audio quality for file size/quality balance</li>
+                        <li>Check URL first to preview video info</li>
+                        <li>Batch download supports up to 3 videos</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Output Console -->
+            <div class="output-card">
+                <div class="output-header">
+                    <h3><i class="fas fa-terminal"></i> Activity Log</h3>
+                    <div class="output-actions">
+                        <button class="btn-clear" onclick="clearOutput()" title="Clear log">
+                            <i class="fas fa-trash-alt"></i> Clear
+                        </button>
+                        <button class="btn-copy" onclick="copyOutput()" title="Copy log">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                    </div>
+                </div>
+                <pre id="output">🚀 YouTube MP3 Downloader - Enhanced Edition
+👨‍💻 Developer: {{ developer.name }}
+🌍 Host: {% if is_pythonanywhere %}PythonAnywhere{% else %}Local Server{% endif %}
+🎬 FFmpeg: {% if ffmpeg_available %}✅ Ready{% else %}❌ Missing{% endif %}
+💾 Free Space: {{ "%.2f"|format(free_space) }} GB
+
+💡 Paste a YouTube URL to get started...</pre>
+            </div>
+
+            <!-- Storage & History Panel - Stacked Layout -->
+<div class="storage-section">
+    <!-- Storage Info -->
+    <div class="storage-card main-storage-card">
+        <div class="storage-header">
+            <h3><i class="fas fa-hdd"></i> Storage Dashboard</h3>
+            <div class="header-actions">
+                <button class="btn-panel" onclick="getStats()" title="Refresh">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+                <button class="btn-panel" onclick="cleanupFiles()" title="Cleanup">
+                    <i class="fas fa-broom"></i>
+                </button>
+            </div>
+        </div>
+        
+        <div class="storage-content">
+            <!-- Storage Stats Grid -->
+            <div class="storage-stats-grid">
+                <div class="storage-stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-music"></i>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Downloads</span>
+                        <span class="stat-value" id="download-count">{{ stats.files|length }}</span>
+                    </div>
+                </div>
+                
+                <div class="storage-stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-database"></i>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Total Size</span>
+                        <span class="stat-value" id="total-size">{{ "%.1f"|format(stats.total_size_mb) }} MB</span>
+                    </div>
+                </div>
+                
+                <div class="storage-stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-hdd"></i>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Free Space</span>
+                        <span class="stat-value" id="free-space">{{ "%.2f"|format(free_space) }} GB</span>
+                    </div>
+                </div>
+                
+                <div class="storage-stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-folder"></i>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Directory</span>
+                        <span class="stat-value" id="storage-location">
+                            {% if is_pythonanywhere %}PythonAnywhere{% else %}Local{% endif %}
+                        </span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- File Actions -->
+
+        </div>
+    </div>
+    
+        <!-- History & Files Side by Side Below Storage -->
+        <div class="history-files-grid">
+            <!-- Recent History Card -->
+            <div class="history-card">
+                <div class="card-header">
+                    <h3><i class="fas fa-history"></i> Recent History</h3>
+                    <div class="header-actions">
+                        <button class="btn-panel" onclick="loadHistory()" title="Refresh">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="card-content">
+                    <div class="history-list" id="history-list">
+                        <div class="history-placeholder">
+                            <i class="fas fa-history"></i>
+                            <p>No download history yet</p>
+                            <small>Download files will appear here</small>
+                        </div>
+                    </div>
+                    
+                    <div class="card-actions">
+                        <button class="btn-action" onclick="showHistory()">
+                            <i class="fas fa-eye"></i> View All
+                        </button>
+                        <button class="btn-action" onclick="clearHistory()">
+                            <i class="fas fa-trash"></i> Clear
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Recent Files Card -->
+            <div class="files-card">
+                <div class="card-header">
+                    <h3><i class="fas fa-file-audio"></i> Recent Files</h3>
+                    <div class="header-actions">
+                        <button class="btn-panel" onclick="refreshFiles()" title="Refresh">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="card-content">
+                    <div class="files-list" id="files-list">
+                        <div class="files-placeholder">
+                            <i class="fas fa-music"></i>
+                            <p>No files downloaded yet</p>
+                            <small>Downloaded MP3 files will appear here</small>
+                        </div>
+                    </div>
+                    
+                    <div class="card-actions">
+                        <button class="btn-action" onclick="showFiles()">
+                            <i class="fas fa-eye"></i> View All
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+            <!-- System Info -->
+            <div class="system-card">
+                <div class="system-header">
+                    <h3><i class="fas fa-info-circle"></i> System Information</h3>
+                </div>
+                <div class="system-info">
+                    <div class="system-item">
+                        <i class="fas fa-server"></i>
+                        <span>{% if is_pythonanywhere %}PythonAnywhere Hosted{% else %}Local Development{% endif %}</span>
+                    </div>
+                    <div class="system-item">
+                        <i class="fas fa-bolt"></i>
+                        <span>Enhanced Edition v2.1.0</span>
+                    </div>
+                    <div class="system-item">
+                        <i class="fas fa-shield-alt"></i>
+                        <span>Secure Processing</span>
+                    </div>
+                    <div class="system-item">
+                        <i class="fas fa-mobile-alt"></i>
+                        <span>Mobile Responsive</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h4><i class="fas fa-rocket"></i> Enhanced Features</h4>
+                    <ul>
+                        <li>Batch downloads (up to 3 videos)</li>
+                        <li>Audio quality selection</li>
+                        <li>Video info preview</li>
+                        <li>Download history</li>
+                        <li>File management</li>
+                        <li>Auto-cleanup</li>
+                    </ul>
+                </div>
+                
+                <div class="footer-section">
+                    <h4><i class="fas fa-exclamation-triangle"></i> Important Notes</h4>
+                    <p>
+                        This tool is for personal use only. Respect copyright laws and YouTube's Terms of Service. 
+                        {% if is_pythonanywhere %}PythonAnywhere free tier has limitations: max 30 minute videos, 100 seconds CPU per request.{% endif %}
+                    </p>
+                </div>
+                
+                <div class="footer-section">
+                    <h4><i class="fas fa-code"></i> Technology</h4>
+                    <p>
+                        Built with Flask, yt-dlp, and FFmpeg. Open source technologies powering a seamless 
+                        YouTube to MP3 conversion experience with enhanced features.
+                    </p>
+                </div>
+            </div>
+            
+            <div class="developer-footer">
+                <div class="developer-signature">
+                    <div class="signature-content">
+                        <i class="fas fa-heart"></i>
+                        <p>
+                            Made with passion by <strong>{{ developer.name }}</strong> | 
+                            <strong>Enhanced Edition v2.1.0</strong>
+                        </p>
+                    </div>
+                </div>
+                
+                <div class="copyright">
+                    <p>&copy; <span id="current-year">2023</span> YouTube MP3 Downloader. For educational purposes.</p>
+                    <p class="copyright-note">YouTube is a trademark of Google LLC.</p>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Batch Download Modal -->
+    <div class="modal" id="batch-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-layer-group"></i> Batch Download</h3>
+                <button class="modal-close" onclick="closeBatchModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Enter up to 3 YouTube URLs (one per line):</p>
+                <textarea id="batch-urls" class="batch-textarea" 
+                          placeholder="https://www.youtube.com/watch?v=...
+https://youtu.be/...
+https://www.youtube.com/watch?v=..."
+                          rows="6"></textarea>
+                
+                <div class="batch-info">
+                    <i class="fas fa-info-circle"></i>
+                    <span>Maximum 3 URLs for free tier. Downloads will process one at a time.</span>
+                </div>
+                
+                <div class="modal-actions">
+                    <button class="btn-modal-primary" onclick="startBatchDownload()">
+                        <i class="fas fa-play"></i> Start Batch Download
+                    </button>
+                    <button class="btn-modal-secondary" onclick="closeBatchModal()">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- History Modal -->
+    <div class="modal" id="history-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-history"></i> Download History</h3>
+                <button class="modal-close" onclick="closeHistoryModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="history-container" id="history-container">
+                    <div class="loading-history">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        <span>Loading history...</span>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-modal-secondary" onclick="closeHistoryModal()">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Files Modal -->
+    <div class="modal" id="files-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-file-audio"></i> Downloaded Files</h3>
+                <button class="modal-close" onclick="closeFilesModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="files-container" id="files-container">
+                    <div class="loading-files">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        <span>Loading files...</span>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-modal-secondary" onclick="closeFilesModal()">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Navigation -->
+    <div class="mobile-nav">
+        <button class="mobile-nav-btn" onclick="focusUrlInput()">
+            <i class="fas fa-link"></i>
+        </button>
+        <button class="mobile-nav-btn" onclick="showBatchModal()">
+            <i class="fas fa-layer-group"></i>
+        </button>
+        <button class="mobile-nav-btn" onclick="loadHistory()">
+            <i class="fas fa-history"></i>
+        </button>
+        <button class="mobile-nav-btn" onclick="getStats()">
+            <i class="fas fa-chart-bar"></i>
+        </button>
+    </div>
+
+    <!-- Scripts -->
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
