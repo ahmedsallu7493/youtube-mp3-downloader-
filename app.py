@@ -1,701 +1,411 @@
 """
-YouTube MP3 Downloader - Enhanced Edition
-Developer: Ahmed Sallu
-PythonAnywhere Hosting Configuration
+YouTube MP3 Downloader - Render.com Version
+Developer: Ahmed Faiyazahed Sallu
+Email: sallua543@gmail.com
 """
 
 import os
 import sys
 import shutil
-import yt_dlp
 import time
 import re
 import json
 import uuid
 import threading
-import traceback
-import subprocess
-import hashlib
-from datetime import datetime, timedelta
-from pathlib import Path
-from flask import Flask, render_template, request, jsonify, send_from_directory, send_file, stream_with_context
+import requests
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, send_file, Response
 from flask_cors import CORS
-from functools import wraps
+from urllib.parse import urlparse, parse_qs
+import yt_dlp
 
-# ========== PYTHONANYWHERE CONFIGURATION ==========
-# Detect if running on PythonAnywhere
-IS_PYTHONANYWHERE = 'pythonanywhere' in os.environ.get('HOME', '').lower()
+# ========== CONFIGURATION ==========
+DEVELOPER_NAME = "Ahmed F.Sallu"
+DEVELOPER_EMAIL = "sallua543@gmail.com"
 
-if IS_PYTHONANYWHERE:
-    # PythonAnywhere specific configuration
-    USERNAME = 'ahmedsallu'
-    BASE_DIR = '/home/ahmedsallu/mysite'  # Source code location
-    WORKING_DIR = '/home/ahmedsallu'  # Working directory from web app config
-    
-    # Change to working directory for file operations
-    os.chdir(WORKING_DIR)
-    
-    # Set paths relative to working directory
-    DOWNLOAD_DIR = os.path.join(WORKING_DIR, 'downloads')
-    CONFIG_DIR = os.path.join(WORKING_DIR, 'youtube_app_data')
-    
-    # FFmpeg path
-    FFMPEG_PATH = '/home/ahmedsallu/ffmpeg-static/ffmpeg'
-    
-    # Add project directory to Python path
-    if BASE_DIR not in sys.path:
-        sys.path.insert(0, BASE_DIR)
-    
-    print(f"✅ PythonAnywhere mode activated")
-    print(f"   BASE_DIR: {BASE_DIR}")
-    print(f"   WORKING_DIR: {WORKING_DIR}")
-    print(f"   DOWNLOAD_DIR: {DOWNLOAD_DIR}")
-    print(f"   FFMPEG_PATH: {FFMPEG_PATH}")
-    
-else:
-    # Local development configuration
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    WORKING_DIR = BASE_DIR
-    DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
-    CONFIG_DIR = os.path.join(BASE_DIR, "app_data")
-    FFMPEG_PATH = 'ffmpeg'
-    print(f"✅ Local development mode")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 
-# Developer information
-DEVELOPER_NAME = "Ahmed Sallu"
-DEVELOPER_EMAIL = "ahmedsallu7493@gmail.com"
-DEVELOPER_GITHUB = "github.com/ahmedsallu7493"
+# Create directory if not exists
+os.makedirs(DEFAULT_DOWNLOAD_DIR, exist_ok=True)
 
-# ========== FLASK APP SETUP ==========
 app = Flask(__name__, 
     static_folder=os.path.join(BASE_DIR, 'static'),
     template_folder=os.path.join(BASE_DIR, 'templates')
 )
 CORS(app)
 
-# Set secret key
-app.secret_key = os.environ.get('SECRET_KEY', 'youtube-mp3-downloader-secret-key-2024')
-
-# ========== PATHS AND FILES ==========
-# Configuration files (stored in config directory)
-FAILED_FILE = os.path.join(CONFIG_DIR, "failed_urls.txt")
-SUCCESS_FILE = os.path.join(CONFIG_DIR, "success_urls.txt")
-SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
-LOG_FILE = os.path.join(CONFIG_DIR, "app.log")
-HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
-QUEUE_FILE = os.path.join(CONFIG_DIR, "queue.json")
-
-# Create necessary directories
-for directory in [DOWNLOAD_DIR, CONFIG_DIR]:
-    os.makedirs(directory, exist_ok=True)
-
-# Store active downloads
-active_downloads = {}
+# ========== GLOBAL VARIABLES ==========
 download_progress = {}
-download_queue = []
-MAX_CONCURRENT_DOWNLOADS = 1
-download_history = []
+active_downloads = {}
 
 # ========== UTILITY FUNCTIONS ==========
-def log_message(message, level="INFO"):
-    """Log messages to file and console"""
+def log_message(message):
+    """Simple logging"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_entry = f"[{timestamp}] [{level}] {message}\n"
-    
+    print(f"[{timestamp}] {message}")
+
+def get_free_space():
+    """Get free disk space in GB"""
     try:
-        with open(LOG_FILE, 'a', encoding='utf-8') as f:
-            f.write(log_entry)
+        stat = shutil.disk_usage(DEFAULT_DOWNLOAD_DIR)
+        return round(stat.free / (1024**3), 2)
     except:
-        pass
-    
-    if IS_PYTHONANYWHERE:
-        # Print to stderr for PythonAnywhere logs
-        print(log_entry.strip(), file=sys.stderr)
-    else:
-        print(log_entry.strip())
-
-def log_error(error_msg, exc_info=None):
-    """Log errors with traceback"""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_entry = f"[{timestamp}] [ERROR] {error_msg}\n"
-    
-    if exc_info:
-        log_entry += f"Exception: {exc_info}\n"
-        log_entry += f"Traceback: {traceback.format_exc()}\n"
-    
-    try:
-        with open(LOG_FILE, 'a', encoding='utf-8') as f:
-            f.write(log_entry)
-    except:
-        pass
-    
-    if IS_PYTHONANYWHERE:
-        print(log_entry.strip(), file=sys.stderr)
-    else:
-        print(log_entry.strip())
-
-def get_absolute_path(relative_path):
-    """Get absolute path for file operations"""
-    if IS_PYTHONANYWHERE:
-        # For PythonAnywhere, use working directory
-        return os.path.join(WORKING_DIR, relative_path)
-    else:
-        return os.path.join(BASE_DIR, relative_path)
-
-def ffmpeg_available():
-    """Check if FFmpeg is available"""
-    try:
-        if IS_PYTHONANYWHERE:
-            # Check our static FFmpeg binary
-            if os.path.exists(FFMPEG_PATH):
-                result = subprocess.run([FFMPEG_PATH, '-version'], 
-                                      capture_output=True, text=True)
-                if result.returncode == 0:
-                    log_message(f"FFmpeg found at: {FFMPEG_PATH}")
-                    return True
-            return False
-        else:
-            # Check system FFmpeg
-            possible_paths = [
-                '/usr/bin/ffmpeg',
-                '/usr/local/bin/ffmpeg',
-                '/bin/ffmpeg',
-                shutil.which("ffmpeg")
-            ]
-            
-            for path in possible_paths:
-                if path and os.path.exists(path):
-                    log_message(f"FFmpeg found at: {path}")
-                    return True
-            
-            return False
-    except Exception as e:
-        log_error(f"Error checking FFmpeg: {e}")
-        return False
+        return 10.0  # Default value
 
 def sanitize_url(url):
-    """Sanitize and validate YouTube URL"""
+    """Clean and validate YouTube URL"""
     if not url:
         return None
     
     url = url.strip()
     
+    # Convert youtu.be to youtube.com
+    if 'youtu.be' in url:
+        video_id = url.split('/')[-1].split('?')[0]
+        url = f'https://www.youtube.com/watch?v={video_id}'
+    
     # Remove tracking parameters
+    url = re.sub(r'\?si=.*', '', url)
     url = re.sub(r'&t=\d+s', '', url)
-    url = re.sub(r'&feature=share', '', url)
     
     # Validate YouTube URL
-    youtube_patterns = [
-        r'^https?://(www\.)?youtube\.com/watch\?v=[\w-]+',
-        r'^https?://youtu\.be/[\w-]+',
-        r'^https?://(www\.)?youtube\.com/playlist\?list=[\w-]+',
-        r'^https?://(www\.)?youtube\.com/shorts/[\w-]+'
+    patterns = [
+        r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})',
+        r'(?:https?://)?(?:www\.)?youtu\.be/([a-zA-Z0-9_-]{11})',
+        r'(?:https?://)?(?:www\.)?youtube\.com/shorts/([a-zA-Z0-9_-]{11})'
     ]
     
-    for pattern in youtube_patterns:
-        if re.match(pattern, url):
-            return url
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return f"https://www.youtube.com/watch?v={match.group(1)}"
     
     return None
 
-def save_to_history(url, title, filename, size_mb, status):
-    """Save download to history"""
-    try:
-        history_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "url": url,
-            "title": title,
-            "filename": filename,
-            "size_mb": size_mb,
-            "status": status
-        }
-        
-        # Load existing history
-        history = []
-        if os.path.exists(HISTORY_FILE):
-            try:
-                with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                    history = json.load(f)
-            except:
-                history = []
-        
-        # Add new entry (keep last 100 entries)
-        history.append(history_entry)
-        if len(history) > 100:
-            history = history[-100:]
-        
-        # Save history
-        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(history, f, indent=2)
-            
-    except Exception as e:
-        log_error(f"Error saving to history: {e}")
-
-def get_video_info(url):
-    """Get video information without downloading"""
-    try:
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_js_warning": True,
-            "extract_flat": False,
-            "ignoreerrors": False,
-            "socket_timeout": 10,
-            "retries": 1,
-            "noprogress": True
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            
-            # Calculate duration in minutes:seconds
-            duration_seconds = info.get('duration', 0)
-            if duration_seconds:
-                minutes = duration_seconds // 60
-                seconds = duration_seconds % 60
-                duration = f"{minutes}:{seconds:02d}"
-            else:
-                duration = "Unknown"
-            
-            # Check PythonAnywhere limits
-            warning = ""
-            if IS_PYTHONANYWHERE:
-                if duration_seconds > 1800:  # 30 minutes
-                    warning = "Video is longer than 30 minutes (PythonAnywhere free tier limit)"
-                elif duration_seconds > 600:  # 10 minutes
-                    warning = "Video is long, download may be slow on free tier"
-            
-            return {
-                "status": "success",
-                "title": info.get('title', 'Unknown'),
-                "duration": duration,
-                "duration_seconds": duration_seconds,
-                "thumbnail": info.get('thumbnail', ''),
-                "uploader": info.get('uploader', 'Unknown'),
-                "view_count": info.get('view_count', 0),
-                "like_count": info.get('like_count', 0),
-                "is_live": info.get('is_live', False),
-                "age_limit": info.get('age_limit', 0),
-                "warning": warning
-            }
-    except Exception as e:
-        log_error(f"Error getting video info: {e}")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-
-def check_disk_space():
-    """Check available disk space"""
-    try:
-        if IS_PYTHONANYWHERE:
-            # PythonAnywhere specific disk check
-            stat = shutil.disk_usage(WORKING_DIR)
-        else:
-            stat = shutil.disk_usage(DOWNLOAD_DIR)
-        
-        free_gb = stat.free / (1024**3)
-        return free_gb
-    except Exception as e:
-        log_error(f"Error checking disk space: {e}")
-        return 0.5
+def extract_video_id(url):
+    """Extract YouTube video ID from URL"""
+    patterns = [
+        r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+        r'youtu\.be\/([0-9A-Za-z_-]{11})',
+        r'embed\/([0-9A-Za-z_-]{11})',
+        r'\/shorts\/([0-9A-Za-z_-]{11})'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
 
 def clean_filename(filename):
     """Clean filename for safe saving"""
+    if not filename:
+        return "audio"
+    
+    # Remove invalid characters
     filename = re.sub(r'[<>:"/\\|?*]', '', filename)
     filename = re.sub(r'\s+', ' ', filename)
     filename = filename.strip()
     
+    # Truncate if too long
     if len(filename) > 100:
         name, ext = os.path.splitext(filename)
-        filename = name[:95] + ext
+        filename = name[:95] + ext if ext else name[:100]
     
     return filename
 
-def load_settings():
-    """Load application settings"""
-    default_settings = {
-        "max_file_size_mb": 30 if IS_PYTHONANYWHERE else 50,
-        "max_downloads_per_day": 10,
-        "download_dir": DOWNLOAD_DIR,
-        "audio_quality": "128" if IS_PYTHONANYWHERE else "192",
-        "enable_progress": True,
-        "auto_cleanup_days": 1 if IS_PYTHONANYWHERE else 7,
-        "enable_history": True,
-        "default_location": "downloads",
-        "enable_thumbnail": True,
-        "enable_queue": True
-    }
+def format_duration(seconds):
+    """Format seconds to HH:MM:SS"""
+    if not seconds:
+        return "0:00"
     
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    else:
+        return f"{minutes}:{seconds:02d}"
+
+# ========== REAL YOUTUBE DOWNLOAD USING YT-DLP ==========
+def download_youtube_audio_real(url, quality, download_id):
+    """Download real YouTube audio using yt-dlp"""
     try:
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                user_settings = json.load(f)
-                default_settings.update(user_settings)
-    except Exception as e:
-        log_error(f"Error loading settings: {e}")
-    
-    return default_settings
-
-def save_settings(settings):
-    """Save application settings"""
-    try:
-        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, indent=4)
-        return True
-    except Exception as e:
-        log_error(f"Error saving settings: {e}")
-        return False
-
-def get_download_stats():
-    """Get download statistics"""
-    stats = {
-        "total_downloads": 0,
-        "total_size_mb": 0,
-        "files": [],
-        "ffmpeg_available": ffmpeg_available(),
-        "download_dir": DOWNLOAD_DIR,
-        "developer": {
-            "name": DEVELOPER_NAME,
-            "email": DEVELOPER_EMAIL,
-            "github": DEVELOPER_GITHUB
-        }
-    }
-    
-    try:
-        if os.path.exists(DOWNLOAD_DIR):
-            for file in os.listdir(DOWNLOAD_DIR):
-                if file.endswith('.mp3'):
-                    filepath = os.path.join(DOWNLOAD_DIR, file)
-                    if os.path.isfile(filepath):
-                        try:
-                            size = os.path.getsize(filepath) / (1024 * 1024)
-                            modified = os.path.getmtime(filepath)
-                            stats["total_downloads"] += 1
-                            stats["total_size_mb"] += size
-                            stats["files"].append({
-                                "name": file,
-                                "size_mb": round(size, 2),
-                                "path": filepath,
-                                "modified": datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M")
-                            })
-                        except:
-                            continue
-    except Exception as e:
-        log_error(f"Error getting stats: {e}")
-    
-    return stats
-
-def auto_cleanup():
-    """Automatically clean old files (PythonAnywhere specific)"""
-    if not IS_PYTHONANYWHERE:
-        return 0
-    
-    try:
-        settings = load_settings()
-        max_age_days = settings.get("auto_cleanup_days", 1)
-        max_files = 15  # Keep only 15 newest files on free tier
+        log_message(f"Starting REAL download: {url[:50]}...")
         
-        if not os.path.exists(DOWNLOAD_DIR):
-            return 0
-        
-        deleted_count = 0
-        now = time.time()
-        cutoff = now - (max_age_days * 24 * 60 * 60)
-        
-        # Get all MP3 files sorted by modification time (oldest first)
-        mp3_files = []
-        for file in os.listdir(DOWNLOAD_DIR):
-            if file.endswith('.mp3'):
-                filepath = os.path.join(DOWNLOAD_DIR, file)
-                if os.path.isfile(filepath):
-                    mtime = os.path.getmtime(filepath)
-                    mp3_files.append((mtime, filepath, file))
-        
-        # Sort by modification time
-        mp3_files.sort()
-        
-        # Delete files older than cutoff
-        for mtime, filepath, filename in mp3_files:
-            if mtime < cutoff:
-                try:
-                    os.remove(filepath)
-                    deleted_count += 1
-                    log_message(f"Auto-cleaned: {filename}")
-                except:
-                    continue
-        
-        # If still too many files, delete oldest ones
-        remaining_files = len(mp3_files) - deleted_count
-        if remaining_files > max_files:
-            to_delete = remaining_files - max_files
-            for i in range(to_delete):
-                try:
-                    mtime, filepath, filename = mp3_files[i]
-                    os.remove(filepath)
-                    deleted_count += 1
-                    log_message(f"Auto-cleaned (limit): {filename}")
-                except:
-                    continue
-        
-        if deleted_count > 0:
-            log_message(f"Auto-cleanup completed: {deleted_count} files removed")
-        
-        return deleted_count
-    except Exception as e:
-        log_error(f"Auto-cleanup error: {e}")
-        return 0
-
-def check_pythonanywhere_limits(video_info):
-    """Check PythonAnywhere free tier limits"""
-    if not IS_PYTHONANYWHERE:
-        return True
-    
-    # Check duration (max 10 minutes for free tier to be safe)
-    duration_seconds = video_info.get('duration_seconds', 0)
-    if duration_seconds > 600:  # 10 minutes
-        raise Exception(f"Video too long ({duration_seconds//60}min). Max 10 minutes for PythonAnywhere free tier.")
-    
-    # Check if live stream
-    if video_info.get('is_live', False):
-        raise Exception("Live streams cannot be downloaded.")
-    
-    # Check age restriction
-    if video_info.get('age_limit', 0) > 0:
-        raise Exception("Age-restricted videos cannot be downloaded.")
-    
-    return True
-
-def download_audio(url, download_dir=None, download_id=None, quality="128"):
-    """Download audio with progress tracking"""
-    if download_dir is None:
-        settings = load_settings()
-        download_dir = settings.get("download_dir", DOWNLOAD_DIR)
-    
-    # Check FFmpeg availability
-    if not ffmpeg_available():
-        raise Exception("FFmpeg is not available. This is required for MP3 conversion.")
-    
-    # Check disk space
-    free_space = check_disk_space()
-    if free_space < 0.1:  # Less than 100MB
-        raise Exception(f"Insufficient disk space. Only {free_space:.2f}GB free.")
-    
-    log_message(f"Starting download for URL: {url[:100]}...")
-    log_message(f"Quality: {quality}kbps")
-    log_message(f"Download directory: {download_dir}")
-    
-    # Initialize progress tracking
-    if download_id:
+        # Initialize progress
         download_progress[download_id] = {
             "status": "starting",
-            "percent": 0,
+            "percent": "0",
             "downloaded_bytes": 0,
             "total_bytes": 0,
             "speed": "0 B/s",
-            "eta": "Unknown",
+            "eta": "00:30",
             "filename": "",
-            "title": ""
+            "title": "Initializing download...",
+            "message": ""
         }
-    
-    # Progress hook function
-    def progress_hook(d):
-        if download_id and download_id in download_progress:
-            if d['status'] == 'downloading':
-                download_progress[download_id].update({
-                    "status": "downloading",
-                    "percent": d.get('_percent_str', '0%').strip('%'),
-                    "downloaded_bytes": d.get('downloaded_bytes', 0),
-                    "total_bytes": d.get('total_bytes', 0),
-                    "speed": d.get('_speed_str', '0 B/s'),
-                    "eta": d.get('_eta_str', 'Unknown'),
-                    "filename": d.get('filename', ''),
-                    "title": d.get('info_dict', {}).get('title', '')
-                })
-            elif d['status'] == 'finished':
-                download_progress[download_id].update({
-                    "status": "converting",
-                    "percent": "100",
-                    "filename": d.get('filename', '')
-                })
-    
-    # YouTubeDL options optimized for PythonAnywhere
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": os.path.join(download_dir, "%(title)s.%(ext)s"),
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": quality,
-            }
-        ],
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "nooverwrites": True,
-        "socket_timeout": 30,
-        "retries": 3,
-        "skip_js_warning": True,
-        "progress_hooks": [progress_hook],
-        "max_filesize": 30 * 1024 * 1024,  # 30MB limit for free tier
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        },
-        "noprogress": True,
-        "extract_flat": False,
-        "ignoreerrors": False,
-        "no_color": True,
-    }
-    
-    # Add FFmpeg location for PythonAnywhere
-    if IS_PYTHONANYWHERE and os.path.exists(FFMPEG_PATH):
-        ydl_opts["ffmpeg_location"] = FFMPEG_PATH
-    
-    try:
+        
+        # Custom yt-dlp options for Render.com
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': os.path.join(DEFAULT_DOWNLOAD_DIR, '%(title)s.%(ext)s'),
+            'quiet': True,
+            'no_warnings': False,
+            'progress_hooks': [lambda d: progress_hook(d, download_id)],
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': quality,
+            }],
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'referer': 'https://www.youtube.com/',
+            'socket_timeout': 30,
+            'retries': 10,
+            'fragment_retries': 10,
+            'ignoreerrors': False,
+            'no_check_certificate': False,
+            'prefer_insecure': False,
+            'keepvideo': False,
+            'writethumbnail': False,
+            'writeinfojson': False,
+            'extract_flat': False,
+            'noplaylist': True,
+            'sleep_interval': 1,
+            'max_sleep_interval': 5,
+            'external_downloader': None,
+            'concurrent_fragment_downloads': 4,
+        }
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Extract info first
+            # First get info
             info = ydl.extract_info(url, download=False)
+            video_title = clean_filename(info.get('title', f'audio_{download_id[:8]}'))
             
-            # Check PythonAnywhere limits
-            check_pythonanywhere_limits({
-                "duration_seconds": info.get('duration', 0),
-                "is_live": info.get('is_live', False),
-                "age_limit": info.get('age_limit', 0)
+            download_progress[download_id].update({
+                "status": "preparing",
+                "percent": "10",
+                "title": f"Preparing: {video_title[:50]}...",
+                "message": "Starting download..."
             })
             
-            title = info.get("title", "audio")
-            clean_title = clean_filename(title)
-            mp3_path = os.path.join(download_dir, f"{clean_title}.mp3")
-            
-            if download_id:
-                download_progress[download_id]["title"] = title
-            
-            # Check if already exists
-            if os.path.exists(mp3_path):
-                size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
-                log_message(f"File already exists: {clean_title}")
-                if download_id:
-                    download_progress[download_id].update({
-                        "status": "completed",
-                        "percent": "100",
-                        "filename": mp3_path,
-                        "message": f"Already downloaded: {clean_title} ({size_mb:.1f}MB)"
-                    })
-                return {
-                    "status": "exists",
-                    "message": f"Already downloaded: {clean_title} ({size_mb:.1f}MB)",
-                    "filename": clean_title + ".mp3",
-                    "path": mp3_path,
-                    "size_mb": size_mb,
-                    "title": title,
-                    "quality": quality
-                }
-            
-            log_message(f"Downloading: {title}")
-            if download_id:
-                download_progress[download_id].update({
-                    "status": "downloading",
-                    "percent": "0"
-                })
-            
-            # Add small delay for PythonAnywhere rate limiting
-            if IS_PYTHONANYWHERE:
-                time.sleep(1)
-            
-            ydl.download([url])
-            
-            # Wait for file system
-            time.sleep(2)
-            
-            # Look for the downloaded file
-            for ext in ['.mp3', '.webm', '.m4a']:
-                test_path = os.path.join(download_dir, f"{clean_title}{ext}")
-                if os.path.exists(test_path):
-                    size_mb = os.path.getsize(test_path) / (1024 * 1024)
-                    log_message(f"Download completed: {clean_title}{ext} ({size_mb:.1f}MB)")
-                    
-                    # Save to history
-                    save_to_history(url, title, clean_title + ext, size_mb, "success")
-                    
-                    if download_id:
-                        download_progress[download_id].update({
-                            "status": "completed",
-                            "percent": "100",
-                            "filename": test_path,
-                            "message": f"Downloaded: {clean_title}{ext} ({size_mb:.1f}MB)"
-                        })
-                    return {
-                        "status": "success",
-                        "message": f"Downloaded: {clean_title}{ext} ({size_mb:.1f}MB)",
-                        "filename": clean_title + ext,
-                        "path": test_path,
-                        "size_mb": size_mb,
-                        "title": title,
-                        "quality": quality,
-                        "download_url": f"/download-file/{download_id}" if download_id else None
-                    }
-            
-            # Save failed attempt to history
-            save_to_history(url, title, "", 0, "failed")
-            raise Exception("Download completed but file not found")
-                
-    except yt_dlp.utils.DownloadError as e:
-        error_msg = str(e)
-        log_error(f"yt-dlp download error: {error_msg}")
+            # Then download
+            result = ydl.extract_info(url, download=True)
         
-        # User-friendly error messages
-        if "Private video" in error_msg:
-            error_msg = "This video is private or requires login."
-        elif "Video unavailable" in error_msg:
-            error_msg = "This video is unavailable in your country or has been removed."
-        elif "Sign in to confirm" in error_msg:
-            error_msg = "This video requires age verification."
-        elif "too many requests" in error_msg.lower():
-            error_msg = "Too many requests. Please wait a few minutes."
+        # Find the downloaded file
+        expected_filename = f"{video_title}.mp3"
+        expected_path = os.path.join(DEFAULT_DOWNLOAD_DIR, expected_filename)
         
-        # Save failed attempt to history
-        save_to_history(url, "", "", 0, "failed")
-        raise Exception(error_msg)
+        # Check if file exists
+        if os.path.exists(expected_path):
+            filepath = expected_path
+            downloaded_filename = expected_filename
+        else:
+            # Search for any new MP3 files
+            all_files_before = set(os.listdir(DEFAULT_DOWNLOAD_DIR))
+            mp3_files = [f for f in os.listdir(DEFAULT_DOWNLOAD_DIR) 
+                        if f.endswith('.mp3') and f not in all_files_before]
+            
+            if mp3_files:
+                downloaded_filename = mp3_files[0]
+                filepath = os.path.join(DEFAULT_DOWNLOAD_DIR, downloaded_filename)
+            else:
+                raise Exception("Downloaded MP3 file not found")
+        
+        if os.path.exists(filepath):
+            file_size = os.path.getsize(filepath) / (1024 * 1024)  # MB
+            
+            # Update progress to completed
+            download_progress[download_id].update({
+                "status": "completed",
+                "percent": "100",
+                "downloaded_bytes": file_size * 1024 * 1024,
+                "total_bytes": file_size * 1024 * 1024,
+                "speed": "Completed",
+                "eta": "00:00",
+                "title": video_title,
+                "message": f"Downloaded: {video_title} ({file_size:.2f} MB)",
+                "filename": downloaded_filename
+            })
+            
+            # Save to active downloads
+            active_downloads[download_id] = {
+                "status": "success",
+                "message": f"Downloaded: {video_title} ({file_size:.2f} MB)",
+                "filename": downloaded_filename,
+                "path": filepath,
+                "size_mb": round(file_size, 2),
+                "title": video_title,
+                "download_url": f"/download-file/{download_id}",
+                "created_at": datetime.now().isoformat()
+            }
+            
+            log_message(f"✅ Download completed: {downloaded_filename} ({file_size:.2f} MB)")
+            
+            # Clean old files if storage > 500MB
+            cleanup_old_files(500)
+        else:
+            raise Exception("Downloaded file does not exist")
             
     except Exception as e:
         error_msg = str(e)
-        log_error(f"Download error: {error_msg}", e)
+        log_message(f"❌ Download error: {error_msg}")
         
-        # Save failed attempt to history
-        save_to_history(url, "", "", 0, "failed")
-        
-        if download_id:
+        if download_id in download_progress:
             download_progress[download_id].update({
                 "status": "error",
-                "message": error_msg[:200]
+                "message": error_msg[:100]  # Truncate long errors
             })
+
+def progress_hook(d, download_id):
+    """Progress hook for yt-dlp"""
+    if download_id not in download_progress:
+        return
+    
+    if d['status'] == 'downloading':
+        # Parse progress information
+        total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+        downloaded_bytes = d.get('downloaded_bytes', 0)
         
-        raise
+        # Calculate percentage
+        if total_bytes > 0:
+            percent = (downloaded_bytes / total_bytes) * 100
+        else:
+            percent = 0
+        
+        # Update progress
+        download_progress[download_id].update({
+            "status": "downloading",
+            "percent": f"{percent:.1f}",
+            "downloaded_bytes": downloaded_bytes,
+            "total_bytes": total_bytes,
+            "speed": d.get('_speed_str', '0 B/s'),
+            "eta": d.get('_eta_str', '00:00'),
+            "title": d.get('filename', d.get('_filename', 'Downloading...'))[:60],
+            "message": f"Downloading: {percent:.1f}%"
+        })
+    
+    elif d['status'] == 'finished':
+        download_progress[download_id].update({
+            "status": "converting",
+            "percent": "95",
+            "message": "Converting to MP3...",
+            "speed": "Converting"
+        })
+    
+    elif d['status'] == 'error':
+        download_progress[download_id].update({
+            "status": "error",
+            "message": d.get('error', 'Unknown error')[:100]
+        })
+
+def cleanup_old_files(max_size_mb=500):
+    """Clean old files if storage exceeds limit"""
+    try:
+        files = []
+        for file in os.listdir(DEFAULT_DOWNLOAD_DIR):
+            if file.endswith('.mp3'):
+                filepath = os.path.join(DEFAULT_DOWNLOAD_DIR, file)
+                size = os.path.getsize(filepath) / (1024 * 1024)  # MB
+                modified = os.path.getmtime(filepath)
+                files.append({
+                    'path': filepath,
+                    'size': size,
+                    'modified': modified,
+                    'name': file
+                })
+        
+        # Sort by modification time (oldest first)
+        files.sort(key=lambda x: x['modified'])
+        
+        # Calculate total size
+        total_size = sum(f['size'] for f in files)
+        
+        # Remove old files if total size exceeds limit
+        removed = 0
+        while total_size > max_size_mb and files:
+            oldest = files.pop(0)
+            try:
+                os.remove(oldest['path'])
+                total_size -= oldest['size']
+                removed += 1
+                log_message(f"🧹 Cleaned old file: {oldest['name']}")
+            except:
+                pass
+        
+        if removed > 0:
+            log_message(f"🧹 Cleaned {removed} old files")
+            
+    except Exception as e:
+        log_message(f"Cleanup error: {e}")
 
 # ========== FLASK ROUTES ==========
 @app.route("/")
 def home():
     """Home page"""
-    stats = get_download_stats()
-    free_space = check_disk_space()
-    settings = load_settings()
-    
-    # Auto-cleanup on home page load
-    if IS_PYTHONANYWHERE:
-        auto_cleanup()
-    
-    return render_template("index.html", 
-                         stats=stats,
-                         free_space=round(free_space, 2),
-                         settings=settings,
-                         is_pythonanywhere=IS_PYTHONANYWHERE,
-                         ffmpeg_available=stats["ffmpeg_available"],
-                         developer=stats["developer"])
+    try:
+        # Get basic stats
+        total_downloads = 0
+        total_size = 0
+        files_list = []
+        
+        if os.path.exists(DEFAULT_DOWNLOAD_DIR):
+            for file in os.listdir(DEFAULT_DOWNLOAD_DIR):
+                if file.endswith('.mp3'):
+                    total_downloads += 1
+                    try:
+                        filepath = os.path.join(DEFAULT_DOWNLOAD_DIR, file)
+                        size = os.path.getsize(filepath) / (1024 * 1024)
+                        total_size += size
+                        
+                        modified = os.path.getmtime(filepath)
+                        files_list.append({
+                            "name": file,
+                            "size_mb": round(size, 2),
+                            "path": filepath,
+                            "modified": datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M")
+                        })
+                    except:
+                        pass
+        
+        free_space = get_free_space()
+        
+        return render_template(
+            "index.html", 
+            stats={
+                "total_downloads": total_downloads,
+                "total_size_mb": round(total_size, 2),
+                "files": files_list[:5],
+                "developer": {
+                    "name": DEVELOPER_NAME,
+                    "email": DEVELOPER_EMAIL,
+                    "github": "github.com/ahmedsallu7493"
+                }
+            },
+            free_space=free_space,
+            is_pythonanywhere=False,
+            developer={
+                "name": DEVELOPER_NAME,
+                "email": DEVELOPER_EMAIL,
+                "github": "github.com/ahmedsallu7493"
+            }
+        )
+    except Exception as e:
+        log_message(f"Home error: {e}")
+        return f"""
+        <html><body style="padding:20px;font-family:Arial;">
+            <h1>YouTube MP3 Downloader</h1>
+            <p>Status: Running</p>
+            <p>Error: {str(e)}</p>
+            <p><a href="/health-check">Check Health</a></p>
+        </body></html>
+        """
 
 @app.route("/check-url", methods=["POST"])
 def check_url_endpoint():
-    """Check URL and get video info"""
+    """Check URL using yt-dlp"""
     try:
         data = request.get_json()
         url = data.get("url", "").strip()
@@ -703,79 +413,127 @@ def check_url_endpoint():
         if not url:
             return jsonify({"status": "error", "message": "No URL provided"}), 400
         
-        # Sanitize and validate URL
         sanitized_url = sanitize_url(url)
         if not sanitized_url:
             return jsonify({"status": "error", "message": "Invalid YouTube URL"}), 400
         
-        # Get video info
-        info = get_video_info(sanitized_url)
+        # Get video info using yt-dlp
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'extract_flat': False,
+        }
         
-        if info["status"] == "error":
-            return jsonify({"status": "error", "message": info["message"]}), 400
-        
-        return jsonify({"status": "success", "info": info})
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(sanitized_url, download=False)
+            
+            # Get best thumbnail
+            thumbnails = info.get('thumbnails', [])
+            thumbnail = ''
+            if thumbnails:
+                # Try to get highest quality thumbnail
+                for thumb in reversed(thumbnails):
+                    if thumb.get('url'):
+                        thumbnail = thumb['url']
+                        break
+            
+            if not thumbnail and info.get('thumbnail'):
+                thumbnail = info['thumbnail']
+            
+            # Format duration
+            duration_seconds = info.get('duration', 0)
+            duration = format_duration(duration_seconds)
+            
+            # Check if video is too long (>2 hours)
+            warning = None
+            if duration_seconds > 7200:  # 2 hours
+                warning = "Video is long (>2 hours). Download may take time."
+            elif duration_seconds > 3600:  # 1 hour
+                warning = "Video is long (>1 hour). Please be patient."
+            
+            return jsonify({
+                "status": "success",
+                "info": {
+                    "title": info.get('title', 'Unknown Title'),
+                    "duration": duration,
+                    "uploader": info.get('uploader', 'Unknown Uploader'),
+                    "thumbnail": thumbnail,
+                    "duration_seconds": duration_seconds,
+                    "description": info.get('description', '')[:100] + '...' if info.get('description') else '',
+                    "warning": warning,
+                    "view_count": info.get('view_count', 0),
+                    "like_count": info.get('like_count', 0)
+                }
+            })
+            
+        except Exception as e:
+            log_message(f"URL check error: {e}")
+            return jsonify({
+                "status": "error", 
+                "message": f"Could not fetch video info: {str(e)[:100]}"
+            }), 400
         
     except Exception as e:
-        log_error(f"URL check error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/download", methods=["POST"])
 def download():
-    """Download endpoint"""
+    """Start download"""
     try:
         data = request.get_json()
         if not data:
             return jsonify({"status": "error", "message": "No data received"}), 400
         
         url = data.get("url", "").strip()
-        quality = data.get("quality", "128")  # Default to 128 for PythonAnywhere
+        quality = data.get("quality", "192")
         
         if not url:
             return jsonify({"status": "error", "message": "Please enter a YouTube URL"}), 400
         
-        # Sanitize and validate URL
         sanitized_url = sanitize_url(url)
         if not sanitized_url:
-            return jsonify({"status": "error", "message": "Please enter a valid YouTube URL"}), 400
+            return jsonify({"status": "error", "message": "Invalid YouTube URL"}), 400
         
-        # Check for ongoing downloads
-        if len(active_downloads) >= MAX_CONCURRENT_DOWNLOADS:
-            return jsonify({
-                "status": "error", 
-                "message": "Please wait for current download to complete",
-                "queue_position": len(download_queue) + 1
-            }), 429
+        # Check if video is too long (>4 hours)
+        try:
+            with yt_dlp.YoutubeDL({'quiet': True, 'skip_download': True}) as ydl:
+                info = ydl.extract_info(sanitized_url, download=False)
+            
+            if info.get('duration', 0) > 14400:  # 4 hours limit
+                return jsonify({
+                    "status": "error",
+                    "message": "Video is too long (max 4 hours allowed)"
+                }), 400
+                
+        except:
+            pass  # Continue anyway
         
         # Generate download ID
         download_id = str(uuid.uuid4())
         
         # Start download in background thread
-        def download_thread():
-            try:
-                result = download_audio(sanitized_url, None, download_id, quality)
-                active_downloads[download_id] = result
-                log_message(f"Download completed successfully: {download_id}")
-            except Exception as e:
-                active_downloads[download_id] = {"status": "error", "message": str(e)}
-                log_error(f"Download failed: {str(e)}")
-        
-        thread = threading.Thread(target=download_thread)
+        thread = threading.Thread(
+            target=download_youtube_audio_real,
+            args=(sanitized_url, quality, download_id)
+        )
         thread.daemon = True
         thread.start()
         
+        log_message(f"Download started: {download_id}")
+        
         return jsonify({
             "status": "started",
-            "message": "Download started successfully",
+            "message": "Download started successfully!",
             "download_id": download_id,
             "check_progress": f"/progress/{download_id}",
             "download_url": f"/download-file/{download_id}"
         })
         
     except Exception as e:
-        error_msg = str(e)
-        log_error(f"Download route error: {error_msg}", e)
-        return jsonify({"status": "error", "message": error_msg}), 500
+        log_message(f"Download route error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/progress/<download_id>")
 def get_progress(download_id):
@@ -785,6 +543,7 @@ def get_progress(download_id):
             "status": "success",
             "progress": download_progress[download_id]
         })
+    
     elif download_id in active_downloads:
         return jsonify({
             "status": "success",
@@ -794,103 +553,109 @@ def get_progress(download_id):
                 "result": active_downloads[download_id]
             }
         })
+    
     else:
         return jsonify({
             "status": "error",
-            "message": "Download not found or expired"
+            "message": "Download session not found"
         }), 404
 
 @app.route("/download-file/<download_id>")
 def download_file(download_id):
     """Serve downloaded file"""
-    if download_id in active_downloads:
-        result = active_downloads[download_id]
-        if result.get("status") in ["success", "exists"] and "path" in result:
-            filepath = result["path"]
-            filename = result.get("filename", os.path.basename(filepath))
-            
-            if not os.path.exists(filepath):
-                return jsonify({"status": "error", "message": "File not found"}), 404
-            
-            try:
-                return send_file(
-                    filepath,
-                    as_attachment=True,
-                    download_name=filename,
-                    mimetype='audio/mpeg'
-                )
-            except Exception as e:
-                log_error(f"Error sending file: {e}")
-                return jsonify({"status": "error", "message": "Error downloading file"}), 500
-    
-    return jsonify({"status": "error", "message": "File not found"}), 404
-
-@app.route("/get-history")
-def get_history_endpoint():
-    """Get download history"""
     try:
-        history = []
-        if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                history = json.load(f)
+        # Check if download is in active_downloads
+        if download_id in active_downloads:
+            result = active_downloads[download_id]
+            if "path" in result and os.path.exists(result["path"]):
+                try:
+                    return send_file(
+                        result["path"],
+                        as_attachment=True,
+                        download_name=result.get("filename", "audio.mp3"),
+                        mimetype='audio/mpeg'
+                    )
+                except Exception as e:
+                    log_message(f"Error sending file: {e}")
         
-        # Return last 20 entries
+        # Fallback: Search for file in download directory
+        if os.path.exists(DEFAULT_DOWNLOAD_DIR):
+            # Look for any file that might contain the download_id
+            for file in os.listdir(DEFAULT_DOWNLOAD_DIR):
+                if download_id in file or file.endswith('.mp3'):
+                    filepath = os.path.join(DEFAULT_DOWNLOAD_DIR, file)
+                    if os.path.exists(filepath):
+                        return send_file(
+                            filepath,
+                            as_attachment=True,
+                            download_name=file,
+                            mimetype='audio/mpeg'
+                        )
+        
         return jsonify({
-            "status": "success",
-            "history": history[-20:][::-1],  # Reverse to show newest first
-            "total": len(history)
-        })
+            "status": "error", 
+            "message": "File not found. Try downloading again."
+        }), 404
+        
     except Exception as e:
-        log_error(f"Error getting history: {e}")
+        log_message(f"Download file error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route("/clear-history", methods=["POST"])
-def clear_history():
-    """Clear download history"""
+@app.route("/download-direct/<filename>")
+def download_direct(filename):
+    """Download file directly by filename"""
     try:
-        if os.path.exists(HISTORY_FILE):
-            os.remove(HISTORY_FILE)
+        # Security check
+        if ".." in filename or "/" in filename or "\\" in filename:
+            return jsonify({"status": "error", "message": "Invalid filename"}), 400
         
-        # Recreate empty file
-        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump([], f)
+        filepath = os.path.join(DEFAULT_DOWNLOAD_DIR, filename)
         
-        return jsonify({"status": "success", "message": "History cleared"})
+        if os.path.exists(filepath):
+            return send_file(
+                filepath,
+                as_attachment=True,
+                download_name=filename,
+                mimetype='audio/mpeg'
+            )
+        else:
+            return jsonify({"status": "error", "message": "File not found"}), 404
+            
     except Exception as e:
-        log_error(f"Error clearing history: {e}")
+        log_message(f"Direct download error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/list-files")
 def list_files():
     """List downloaded files"""
     try:
-        settings = load_settings()
-        download_dir = settings.get("download_dir", DOWNLOAD_DIR)
-        
         files = []
-        if os.path.exists(download_dir):
-            for file in sorted(os.listdir(download_dir), 
-                             key=lambda x: os.path.getmtime(os.path.join(download_dir, x)), 
+        if os.path.exists(DEFAULT_DOWNLOAD_DIR):
+            for file in sorted(os.listdir(DEFAULT_DOWNLOAD_DIR), 
+                             key=lambda x: os.path.getmtime(os.path.join(DEFAULT_DOWNLOAD_DIR, x)), 
                              reverse=True):
                 if file.endswith('.mp3'):
-                    filepath = os.path.join(download_dir, file)
-                    size = os.path.getsize(filepath) / (1024 * 1024)
-                    modified = os.path.getmtime(filepath)
-                    files.append({
-                        "name": file,
-                        "size_mb": round(size, 2),
-                        "path": filepath,
-                        "modified": datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M")
-                    })
+                    filepath = os.path.join(DEFAULT_DOWNLOAD_DIR, file)
+                    try:
+                        size = os.path.getsize(filepath) / (1024 * 1024)
+                        modified = os.path.getmtime(filepath)
+                        files.append({
+                            "name": file,
+                            "size_mb": round(size, 2),
+                            "path": filepath,
+                            "modified": datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M")
+                        })
+                    except:
+                        continue
         
         return jsonify({
             "status": "success",
-            "files": files[:10],  # Limit to 10 files for PythonAnywhere
+            "files": files[:10],
             "count": len(files),
             "total_size_mb": round(sum(f["size_mb"] for f in files), 2)
         })
     except Exception as e:
-        log_error(f"List files error: {e}")
+        log_message(f"List files error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/delete-file", methods=["POST"])
@@ -901,220 +666,118 @@ def delete_file():
         filename = data.get("filename", "")
         
         if not filename:
-            return jsonify({"status": "error", "message": "No filename provided"}), 400
+            return jsonify({"status": "error", "message": "No filename"}), 400
         
-        settings = load_settings()
-        download_dir = settings.get("download_dir", DOWNLOAD_DIR)
-        filepath = os.path.join(download_dir, filename)
+        filepath = os.path.join(DEFAULT_DOWNLOAD_DIR, filename)
         
         # Security check
-        if not filepath.startswith(download_dir) or ".." in filename:
+        if not filepath.startswith(DEFAULT_DOWNLOAD_DIR) or ".." in filename:
             return jsonify({"status": "error", "message": "Invalid filename"}), 400
         
         if os.path.exists(filepath):
             os.remove(filepath)
-            log_message(f"Deleted file: {filename}")
+            
+            # Remove from active_downloads if present
+            for download_id, data in list(active_downloads.items()):
+                if data.get("filename") == filename:
+                    del active_downloads[download_id]
+                    del download_progress[download_id]
+            
+            log_message(f"Deleted: {filename}")
             return jsonify({"status": "success", "message": f"Deleted: {filename}"})
         else:
             return jsonify({"status": "error", "message": "File not found"}), 404
             
     except Exception as e:
-        log_error(f"Error deleting file: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/cleanup", methods=["POST"])
-def cleanup():
-    """Clean up temporary files"""
-    try:
-        settings = load_settings()
-        download_dir = settings.get("download_dir", DOWNLOAD_DIR)
-        
-        count = 0
-        if os.path.exists(download_dir):
-            for file in os.listdir(download_dir):
-                if file.endswith(('.part', '.ytdl', '.temp', '.webm.part')):
-                    try:
-                        filepath = os.path.join(download_dir, file)
-                        os.remove(filepath)
-                        count += 1
-                        log_message(f"Cleaned: {file}")
-                    except:
-                        continue
-        
-        log_message(f"Cleanup completed: {count} files removed")
-        return jsonify({"status": "success", "message": f"Cleaned {count} temporary files"})
-    except Exception as e:
-        log_error(f"Cleanup error: {e}")
+        log_message(f"Delete error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/stats")
 def stats():
     """Get download statistics"""
     try:
-        settings = load_settings()
-        download_dir = settings.get("download_dir", DOWNLOAD_DIR)
-        stats_data = get_download_stats()
-        free_space = check_disk_space()
+        total_downloads = 0
+        total_size = 0
+        
+        if os.path.exists(DEFAULT_DOWNLOAD_DIR):
+            for file in os.listdir(DEFAULT_DOWNLOAD_DIR):
+                if file.endswith('.mp3'):
+                    total_downloads += 1
+                    try:
+                        filepath = os.path.join(DEFAULT_DOWNLOAD_DIR, file)
+                        total_size += os.path.getsize(filepath) / (1024 * 1024)
+                    except:
+                        pass
+        
+        free_space = get_free_space()
         
         return jsonify({
             "status": "success",
-            "stats": stats_data,
-            "free_space_gb": round(free_space, 2),
-            "download_dir": download_dir,
-            "ffmpeg_available": stats_data["ffmpeg_available"],
-            "pythonanywhere": IS_PYTHONANYWHERE
+            "total_downloads": total_downloads,
+            "total_size_mb": round(total_size, 2),
+            "free_space_gb": free_space,
+            "download_dir": DEFAULT_DOWNLOAD_DIR
         })
     except Exception as e:
-        log_error(f"Stats error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/cleanup", methods=["POST"])
+def cleanup():
+    """Clean temporary files"""
+    try:
+        count = 0
+        if os.path.exists(DEFAULT_DOWNLOAD_DIR):
+            for file in os.listdir(DEFAULT_DOWNLOAD_DIR):
+                if file.endswith(('.part', '.temp', '.ytdl', '.webm', '.m4a')):
+                    try:
+                        filepath = os.path.join(DEFAULT_DOWNLOAD_DIR, file)
+                        os.remove(filepath)
+                        count += 1
+                    except:
+                        continue
+        
+        return jsonify({
+            "status": "success", 
+            "message": f"Cleaned {count} temporary files"
+        })
+    except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/health-check")
 def health_check():
     """Health check endpoint"""
-    try:
-        free_space = check_disk_space()
-        stats_data = get_download_stats()
-        
-        return jsonify({
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "platform": "pythonanywhere" if IS_PYTHONANYWHERE else "local",
-            "disk_space_gb": round(free_space, 2),
-            "ffmpeg_available": stats_data["ffmpeg_available"],
-            "download_dir_exists": os.path.exists(DOWNLOAD_DIR),
-            "files_count": stats_data["total_downloads"],
-            "app_version": "2.1.0",
-            "developer": DEVELOPER_NAME,
-            "limits": {
-                "max_duration_minutes": 10 if IS_PYTHONANYWHERE else 30,
-                "max_file_size_mb": 30 if IS_PYTHONANYWHERE else 50,
-                "max_daily_downloads": 10,
-                "cpu_timeout_seconds": 100 if IS_PYTHONANYWHERE else 300
-            }
-        })
-    except Exception as e:
-        log_error(f"Health check error: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/test-config")
-def test_config():
-    """Test configuration endpoint"""
     return jsonify({
-        'status': 'ok',
-        'pythonanywhere': IS_PYTHONANYWHERE,
-        'username': USERNAME if IS_PYTHONANYWHERE else 'local',
-        'base_dir': BASE_DIR,
-        'working_dir': WORKING_DIR,
-        'current_directory': os.getcwd(),
-        'download_dir': DOWNLOAD_DIR,
-        'config_dir': CONFIG_DIR,
-        'ffmpeg_path': FFMPEG_PATH,
-        'ffmpeg_exists': os.path.exists(FFMPEG_PATH) if IS_PYTHONANYWHERE else True,
-        'files_in_base': os.listdir(BASE_DIR) if os.path.exists(BASE_DIR) else [],
-        'files_in_working': os.listdir(WORKING_DIR) if os.path.exists(WORKING_DIR) else [],
-        'python_version': sys.version,
-        'flask_imported': 'Flask' in sys.modules
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "free_space_gb": get_free_space(),
+        "download_dir_exists": os.path.exists(DEFAULT_DOWNLOAD_DIR),
+        "files_count": len([f for f in os.listdir(DEFAULT_DOWNLOAD_DIR) if f.endswith('.mp3')]) if os.path.exists(DEFAULT_DOWNLOAD_DIR) else 0,
+        "app": "YouTube MP3 Downloader v3.0",
+        "hosting": "Render.com"
     })
 
 # ========== ERROR HANDLERS ==========
 @app.errorhandler(404)
 def not_found(e):
-    log_error(f"404 error: {e}", e)
-    return jsonify({"status": "error", "message": "Resource not found"}), 404
+    return jsonify({"status": "error", "message": "Not found"}), 404
 
 @app.errorhandler(500)
 def server_error(e):
-    log_error(f"500 error: {e}", e)
+    log_message(f"500 error: {e}")
     return jsonify({"status": "error", "message": "Internal server error"}), 500
 
-@app.errorhandler(429)
-def too_many_requests(e):
-    return jsonify({"status": "error", "message": "Too many requests. Please wait."}), 429
-
-@app.errorhandler(413)
-def request_too_large(e):
-    return jsonify({"status": "error", "message": "File too large. Max 30MB for free tier."}), 413
-
-# ========== SECURITY HEADERS ==========
-@app.after_request
-def add_security_headers(response):
-    """Add security headers for production"""
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    if IS_PYTHONANYWHERE:
-        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    return response
-
-# ========== APPLICATION STARTUP ==========
+# ========== STARTUP ==========
 if __name__ == "__main__":
-    print("=" * 80)
-    print("🎵 YouTube MP3 Downloader - Enhanced Edition")
-    print("=" * 80)
-    print(f"👨‍💻 Developer: {DEVELOPER_NAME}")
-    print(f"📧 Contact: {DEVELOPER_EMAIL}")
-    print(f"🌐 GitHub: {DEVELOPER_GITHUB}")
-    print("=" * 80)
+    print("=" * 60)
+    print("🎵 YouTube MP3 Downloader - Render.com Version")
+    print(f"📁 Directory: {DEFAULT_DOWNLOAD_DIR}")
+    print(f"💾 Free space: {get_free_space()} GB")
+    print(f"🚀 Using yt-dlp for real downloads")
+    print("=" * 60)
     
-    # System information
-    print(f"📁 Base Directory: {BASE_DIR}")
-    print(f"📂 Working Directory: {WORKING_DIR}")
-    print(f"💾 Download Directory: {DOWNLOAD_DIR}")
-    print(f"⚙️ Config Directory: {CONFIG_DIR}")
-    print(f"🌍 PythonAnywhere: {IS_PYTHONANYWHERE}")
-    print(f"🎬 FFmpeg Available: {ffmpeg_available()}")
+    # Clear old data on startup
+    download_progress.clear()
+    active_downloads.clear()
     
-    # Load settings
-    settings = load_settings()
-    print(f"📍 Current Download Directory: {DOWNLOAD_DIR}")
-    print(f"💾 Free Disk Space: {check_disk_space():.2f} GB")
-    
-    # Run auto-cleanup on startup
-    deleted = auto_cleanup()
-    if deleted > 0:
-        print(f"🧹 Auto-cleanup: {deleted} files removed")
-    
-    if IS_PYTHONANYWHERE:
-        print("\n⚠️  PythonAnywhere Free Tier Configuration:")
-        print("   • Max video duration: 10 minutes")
-        print("   • Max file size: 30MB")
-        print("   • Auto-cleanup: Enabled (keeps 15 newest files)")
-        print("   • Default quality: 128kbps")
-        print("   • Rate limiting: Enabled")
-    
-    # Test YouTube extraction
-    try:
-        print("\n🔍 Testing YouTube extraction...")
-        ydl_opts = {"quiet": True, "no_warnings": True, "skip_js_warning": True}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info("https://www.youtube.com/watch?v=dQw4w9WgXcQ", download=False)
-            print(f"✅ YouTube extractor working!")
-            print(f"   Title: {info.get('title', 'Unknown')[:50]}...")
-    except Exception as e:
-        print(f"❌ YouTube extractor test failed: {e}")
-    
-    stats = get_download_stats()
-    print(f"\n📊 Existing Downloads: {stats['total_downloads']} files ({stats['total_size_mb']:.1f}MB)")
-    print("=" * 80)
-    
-    # Start server (only for local development)
-    if not IS_PYTHONANYWHERE:
-        print("\n💻 Starting development server...")
-        print("   Open: http://localhost:5000")
-        print("=" * 80)
-        
-        app.run(
-            debug=True,
-            port=5000,
-            host='0.0.0.0',
-            threaded=True,
-            use_reloader=True
-        )
-    else:
-        print("\n✅ PythonAnywhere setup complete!")
-        print(f"   Your app will be available at: https://ahmedsallu.pythonanywhere.com")
-        print("   Make sure to:")
-        print("   1. Update WSGI file")
-        print("   2. Configure static files")
-        print("   3. Reload web app")
-        print("=" * 80)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
