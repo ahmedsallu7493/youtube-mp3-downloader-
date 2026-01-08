@@ -1,5 +1,5 @@
 // YouTube MP3 Downloader - Working JavaScript
-// Version: 3.0 - Render.com Compatible
+// Version: 3.0
 
 // Global variables
 let currentDownloadId = null;
@@ -10,7 +10,10 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log("🎵 YouTube MP3 Downloader loaded!");
     
     // Set current year
-    document.getElementById('current-year').textContent = new Date().getFullYear();
+    const yearElement = document.getElementById('current-year');
+    if (yearElement) {
+        yearElement.textContent = new Date().getFullYear();
+    }
     
     // Load initial data
     loadHistory();
@@ -22,22 +25,28 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Hide loading screen
     setTimeout(() => {
-        document.getElementById('loading-screen').style.opacity = '0';
-        setTimeout(() => {
-            document.getElementById('loading-screen').style.display = 'none';
-        }, 500);
+        const loadingScreen = document.getElementById('loading-screen');
+        if (loadingScreen) {
+            loadingScreen.style.opacity = '0';
+            setTimeout(() => {
+                loadingScreen.style.display = 'none';
+            }, 500);
+        }
     }, 1000);
 });
 
 // Setup event listeners
 function setupEventListeners() {
     // URL input - Enter key support
-    document.getElementById("url").addEventListener("keypress", function(event) {
-        if (event.key === "Enter") {
-            event.preventDefault();
-            checkURL();
-        }
-    });
+    const urlInput = document.getElementById("url");
+    if (urlInput) {
+        urlInput.addEventListener("keypress", function(event) {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                checkURL();
+            }
+        });
+    }
     
     // Keyboard shortcuts
     document.addEventListener('keydown', function(event) {
@@ -65,7 +74,10 @@ async function checkURL() {
     showOutput(`🔍 Checking URL: ${url.substring(0, 80)}...`);
     
     // Hide previous preview
-    document.getElementById('video-preview').style.display = 'none';
+    const videoPreview = document.getElementById('video-preview');
+    if (videoPreview) {
+        videoPreview.style.display = 'none';
+    }
     
     try {
         const response = await fetch('/check-url', {
@@ -81,42 +93,53 @@ async function checkURL() {
             
             // Show video preview
             const preview = document.getElementById('video-preview');
-            document.getElementById('preview-title').textContent = info.title;
-            document.getElementById('preview-duration').innerHTML = 
-                `<i class="fas fa-clock"></i> ${info.duration}`;
-            document.getElementById('preview-uploader').innerHTML = 
-                `<i class="fas fa-user"></i> ${info.uploader}`;
-            
-            // Show thumbnail if available
-            const thumbnail = document.getElementById('preview-thumbnail');
-            thumbnail.innerHTML = '';
-            if (info.thumbnail) {
-                const img = document.createElement('img');
-                img.src = info.thumbnail;
-                img.alt = info.title;
-                img.style.width = '100%';
-                img.style.height = '100%';
-                img.style.objectFit = 'cover';
-                thumbnail.appendChild(img);
-            } else {
-                thumbnail.innerHTML = '<i class="fab fa-youtube"></i>';
+            if (preview) {
+                const previewTitle = document.getElementById('preview-title');
+                const previewDuration = document.getElementById('preview-duration');
+                const previewUploader = document.getElementById('preview-uploader');
+                const thumbnail = document.getElementById('preview-thumbnail');
+                const warning = document.getElementById('preview-warning');
+                
+                if (previewTitle) previewTitle.textContent = info.title;
+                if (previewDuration) previewDuration.innerHTML = `<i class="fas fa-clock"></i> ${info.duration}`;
+                if (previewUploader) previewUploader.innerHTML = `<i class="fas fa-user"></i> ${info.uploader}`;
+                
+                // Show thumbnail
+                if (thumbnail) {
+                    thumbnail.innerHTML = '';
+                    if (info.thumbnail) {
+                        const img = document.createElement('img');
+                        img.src = info.thumbnail;
+                        img.alt = info.title;
+                        img.style.width = '100%';
+                        img.style.height = '100%';
+                        img.style.objectFit = 'cover';
+                        thumbnail.appendChild(img);
+                    } else {
+                        thumbnail.innerHTML = '<i class="fab fa-youtube"></i>';
+                    }
+                }
+                
+                // Show warning
+                if (warning) {
+                    if (info.warning) {
+                        warning.textContent = info.warning;
+                        warning.style.display = 'block';
+                    } else {
+                        warning.style.display = 'none';
+                    }
+                }
+                
+                preview.style.display = 'block';
             }
-            
-            // Show warning if any
-            const warning = document.getElementById('preview-warning');
-            if (info.warning) {
-                warning.textContent = info.warning;
-                warning.style.display = 'block';
-            } else {
-                warning.style.display = 'none';
-            }
-            
-            preview.style.display = 'block';
             
             showSuccess(`✅ ${info.title}`);
             
             // Enable download button
-            document.getElementById('download-btn').disabled = false;
+            const downloadBtn = document.getElementById('download-btn');
+            if (downloadBtn) {
+                downloadBtn.disabled = false;
+            }
             
         } else {
             showError(`❌ ${data.message}`);
@@ -133,14 +156,14 @@ async function checkURL() {
 // ========== DOWNLOAD FUNCTIONS ==========
 async function startDownload() {
     const url = document.getElementById('url').value.trim();
-    const quality = document.getElementById('audio-quality').value;
+    const quality = document.getElementById('audio-quality') ? document.getElementById('audio-quality').value : '192';
+    const downloadBtn = document.getElementById('download-btn');
     
     if (!url) {
         showError('❌ Please paste a YouTube URL first.');
         return;
     }
     
-    const downloadBtn = document.getElementById('download-btn');
     downloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
     downloadBtn.disabled = true;
     
@@ -205,7 +228,7 @@ function startProgressMonitoring(downloadId) {
     }
     
     let attempts = 0;
-    const maxAttempts = 300; // 5 minutes timeout for longer videos
+    const maxAttempts = 300; // 5 minutes timeout
     
     progressInterval = setInterval(async () => {
         attempts++;
@@ -237,9 +260,11 @@ function startProgressMonitoring(downloadId) {
                     
                     // Show download button
                     const downloadLink = document.getElementById('download-file-link');
-                    downloadLink.style.display = 'flex';
-                    downloadLink.href = `/download-file/${downloadId}`;
-                    downloadLink.innerHTML = '<i class="fas fa-file-download"></i> Download MP3';
+                    if (downloadLink) {
+                        downloadLink.style.display = 'flex';
+                        downloadLink.href = `/download-file/${downloadId}`;
+                        downloadLink.innerHTML = '<i class="fas fa-file-download"></i> Download MP3';
+                    }
                     
                     // Refresh data
                     refreshFiles();
@@ -248,8 +273,10 @@ function startProgressMonitoring(downloadId) {
                     
                     // Clear URL input after 3 seconds
                     setTimeout(() => {
-                        document.getElementById('url').value = '';
-                        document.getElementById('video-preview').style.display = 'none';
+                        const urlInput = document.getElementById('url');
+                        const videoPreview = document.getElementById('video-preview');
+                        if (urlInput) urlInput.value = '';
+                        if (videoPreview) videoPreview.style.display = 'none';
                     }, 3000);
                 }
                 
@@ -284,41 +311,29 @@ function updateProgressUI(progress) {
     const progressBar = document.getElementById('progress-bar');
     if (progressBar) {
         progressBar.style.width = `${percent}%`;
-        document.getElementById('progress-text').textContent = `${percent.toFixed(1)}%`;
+        const progressText = document.getElementById('progress-text');
+        if (progressText) progressText.textContent = `${percent.toFixed(1)}%`;
     }
     
     // Update status
     const statusText = progress.status ? progress.status.replace(/_/g, ' ') : 'Processing...';
-    if (document.getElementById('progress-status')) {
-        document.getElementById('progress-status').textContent = statusText;
-    }
+    const progressStatus = document.getElementById('progress-status');
+    if (progressStatus) progressStatus.textContent = statusText;
     
     // Update details
-    if (progress.title && document.getElementById('progress-filename')) {
-        document.getElementById('progress-filename').textContent = 
-            progress.title.substring(0, 60);
+    if (progress.title) {
+        const progressFilename = document.getElementById('progress-filename');
+        if (progressFilename) progressFilename.textContent = progress.title.substring(0, 60);
     }
     
-    if (progress.speed && document.getElementById('progress-speed')) {
-        document.getElementById('progress-speed').textContent = progress.speed;
+    if (progress.speed) {
+        const progressSpeed = document.getElementById('progress-speed');
+        if (progressSpeed) progressSpeed.textContent = progress.speed;
     }
     
-    if (progress.eta && document.getElementById('progress-eta')) {
-        document.getElementById('progress-eta').textContent = progress.eta;
-    }
-    
-    // Update size
-    if (progress.downloaded_bytes && progress.total_bytes) {
-        const downloaded = formatBytes(progress.downloaded_bytes);
-        const total = formatBytes(progress.total_bytes);
-        if (document.getElementById('progress-size')) {
-            document.getElementById('progress-size').textContent = `${downloaded} / ${total}`;
-        }
-    } else if (progress.downloaded_bytes) {
-        if (document.getElementById('progress-size')) {
-            document.getElementById('progress-size').textContent = 
-                formatBytes(progress.downloaded_bytes);
-        }
+    if (progress.eta) {
+        const progressEta = document.getElementById('progress-eta');
+        if (progressEta) progressEta.textContent = progress.eta;
     }
 }
 
@@ -353,9 +368,11 @@ async function refreshFiles() {
                 fileItem.className = 'file-item';
                 fileItem.title = `Click to download: ${file.name}`;
                 
+                const displayName = file.name.length > 40 ? file.name.substring(0, 40) + '...' : file.name;
+                
                 fileItem.innerHTML = `
                     <div class="file-item-header">
-                        <span class="file-item-name">${file.name.substring(0, 40)}${file.name.length > 40 ? '...' : ''}</span>
+                        <span class="file-item-name">${displayName}</span>
                         <span class="file-item-size">${file.size_mb} MB</span>
                     </div>
                     <div class="file-item-details">
@@ -365,7 +382,7 @@ async function refreshFiles() {
                 
                 // Add click to download
                 fileItem.addEventListener('click', () => {
-                    window.location.href = `/download-direct/${encodeURIComponent(file.name)}`;
+                    window.location.href = `/download-file/${encodeURIComponent(file.name)}`;
                 });
                 
                 filesList.appendChild(fileItem);
@@ -373,33 +390,6 @@ async function refreshFiles() {
         }
     } catch (error) {
         console.error('Error loading files:', error);
-    }
-}
-
-async function deleteFile(filename) {
-    if (!confirm(`Delete "${filename}"?`)) {
-        return;
-    }
-    
-    try {
-        const response = await fetch('/delete-file', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename: filename })
-        });
-        
-        const data = await response.json();
-        
-        if (data.status === 'success') {
-            showSuccess(`Deleted: ${filename}`);
-            refreshFiles();
-            getStats();
-            loadHistory();
-        } else {
-            showError(data.message);
-        }
-    } catch (error) {
-        showError(`Error deleting file: ${error.message}`);
     }
 }
 
@@ -411,15 +401,13 @@ async function getStats() {
         
         if (data.status === "success") {
             // Update display
-            if (document.getElementById('download-count')) {
-                document.getElementById('download-count').textContent = data.total_downloads;
-            }
-            if (document.getElementById('total-size')) {
-                document.getElementById('total-size').textContent = data.total_size_mb.toFixed(1) + ' MB';
-            }
-            if (document.getElementById('free-space')) {
-                document.getElementById('free-space').textContent = data.free_space_gb.toFixed(2) + ' GB';
-            }
+            const downloadCount = document.getElementById('download-count');
+            const totalSize = document.getElementById('total-size');
+            const freeSpace = document.getElementById('free-space');
+            
+            if (downloadCount) downloadCount.textContent = data.total_downloads;
+            if (totalSize) totalSize.textContent = data.total_size_mb.toFixed(1) + ' MB';
+            if (freeSpace) freeSpace.textContent = data.free_space_gb.toFixed(2) + ' GB';
         }
     } catch (error) {
         console.error('Error getting stats:', error);
@@ -442,9 +430,11 @@ async function loadHistory() {
                 const historyItem = document.createElement('div');
                 historyItem.className = 'history-item status-success';
                 
+                const displayName = file.name.length > 40 ? file.name.substring(0, 40) + '...' : file.name;
+                
                 historyItem.innerHTML = `
                     <div class="history-item-header">
-                        <span class="history-item-title">${file.name.substring(0, 40)}${file.name.length > 40 ? '...' : ''}</span>
+                        <span class="history-item-title">${displayName}</span>
                         <span class="history-item-status">Downloaded</span>
                     </div>
                     <div class="history-item-details">
@@ -469,16 +459,6 @@ async function loadHistory() {
 }
 
 // ========== UTILITY FUNCTIONS ==========
-function formatBytes(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    if (!bytes) return '0 Bytes';
-    
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
 function showOutput(message) {
     const output = document.getElementById('output');
     if (!output) return;
@@ -495,23 +475,22 @@ function showError(message) {
     showOutput(`❌ ${message}`);
 }
 
-function clearOutput() {
-    const output = document.getElementById('output');
-    if (output) {
-        output.textContent = '🚀 YouTube MP3 Downloader - Ready!\n💡 Paste a YouTube URL to get started...';
-    }
-}
-
 function resetProgress() {
-    if (document.getElementById('progress-bar')) {
-        document.getElementById('progress-bar').style.width = '0%';
-        document.getElementById('progress-text').textContent = '0%';
-        document.getElementById('progress-status').textContent = 'Starting...';
-        document.getElementById('progress-filename').textContent = 'Waiting for title...';
-        document.getElementById('progress-speed').textContent = '0 B/s';
-        document.getElementById('progress-eta').textContent = 'Calculating...';
-        document.getElementById('progress-size').textContent = '0 B / 0 B';
-        document.getElementById('download-file-link').style.display = 'none';
+    const progressBar = document.getElementById('progress-bar');
+    if (progressBar) {
+        progressBar.style.width = '0%';
+        const progressText = document.getElementById('progress-text');
+        if (progressText) progressText.textContent = '0%';
+        const progressStatus = document.getElementById('progress-status');
+        if (progressStatus) progressStatus.textContent = 'Starting...';
+        const progressFilename = document.getElementById('progress-filename');
+        if (progressFilename) progressFilename.textContent = 'Waiting for title...';
+        const progressSpeed = document.getElementById('progress-speed');
+        if (progressSpeed) progressSpeed.textContent = '0 B/s';
+        const progressEta = document.getElementById('progress-eta');
+        if (progressEta) progressEta.textContent = 'Calculating...';
+        const downloadFileLink = document.getElementById('download-file-link');
+        if (downloadFileLink) downloadFileLink.style.display = 'none';
     }
 }
 
@@ -529,20 +508,6 @@ function hideProgressContainer() {
     }
 }
 
-function cancelDownload() {
-    if (progressInterval) {
-        clearInterval(progressInterval);
-        progressInterval = null;
-    }
-    
-    if (currentDownloadId) {
-        showInfo('Download cancelled');
-        currentDownloadId = null;
-    }
-    
-    hideProgressContainer();
-}
-
 // ========== MISC ==========
 function copyOutput() {
     const output = document.getElementById('output');
@@ -555,13 +520,6 @@ function copyOutput() {
         .catch(err => {
             showError(`Failed to copy: ${err}`);
         });
-}
-
-function focusUrlInput() {
-    const urlInput = document.getElementById('url');
-    if (urlInput) {
-        urlInput.focus();
-    }
 }
 
 // Auto-refresh data every 30 seconds

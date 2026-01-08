@@ -2,11 +2,14 @@ services:
   - type: web
     name: youtube-mp3-downloader
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: gunicorn --worker-tmp-dir /dev/shm app:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
+    autoDeploy: true
     disk:
       name: downloads
       mountPath: /opt/render/project/src/downloads
